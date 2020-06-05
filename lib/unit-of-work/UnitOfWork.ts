@@ -110,24 +110,29 @@ export class UnitOfWork {
       throw ValidationError.cannotCommit();
     }
 
-    this.working = true;
-    this.computeChangeSets();
+    try {
+      this.working = true;
+      this.computeChangeSets();
 
-    if (this.changeSets.length === 0 && this.collectionUpdates.length === 0 && this.extraUpdates.length === 0) {
-      return this.postCommitCleanup(); // nothing to do, do not start transaction
+      if (this.changeSets.length === 0 && this.collectionUpdates.length === 0 && this.extraUpdates.length === 0) {
+        return this.postCommitCleanup(); // nothing to do, do not start transaction
+      }
+
+      this.reorderChangeSets();
+      const platform = this.em.getDriver().getPlatform();
+      const runInTransaction = !this.em.isInTransaction() && platform.supportsTransactions() && this.em.config.get('implicitTransactions');
+
+      if (runInTransaction) {
+        await this.em.getConnection('write').transactional(trx => this.persistToDatabase(trx));
+      } else {
+        await this.persistToDatabase(this.em.getTransactionContext());
+      }
+    } catch (e) {
+      throw e;
+    } finally {
+      this.postCommitCleanup();
     }
 
-    this.reorderChangeSets();
-    const platform = this.em.getDriver().getPlatform();
-    const runInTransaction = !this.em.isInTransaction() && platform.supportsTransactions() && this.em.config.get('implicitTransactions');
-
-    if (runInTransaction) {
-      await this.em.getConnection('write').transactional(trx => this.persistToDatabase(trx));
-    } else {
-      await this.persistToDatabase(this.em.getTransactionContext());
-    }
-
-    this.postCommitCleanup();
   }
 
   async lock<T extends AnyEntity<T>>(entity: T, mode: LockMode, version?: number | Date): Promise<void> {
